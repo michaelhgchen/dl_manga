@@ -1,15 +1,15 @@
-const fs = require('fs');
-const puppeteer = require('puppeteer');
+const fs = require("fs");
+const puppeteer = require("puppeteer");
 
 const asyncForEach = async (arr, cb) => {
-  for(let i = 0; i < arr.length; ++i) {
+  for (let i = 0; i < arr.length; ++i) {
     await cb(arr[i], i);
   }
-}
+};
 
-const DOWNLOADED_FOLDER = './downloads';
+const DOWNLOADED_FOLDER = "./downloads";
 
-if (!fs.existsSync(DOWNLOADED_FOLDER)){
+if (!fs.existsSync(DOWNLOADED_FOLDER)) {
   fs.mkdirSync(DOWNLOADED_FOLDER);
 }
 
@@ -19,39 +19,72 @@ if (!fs.existsSync(DOWNLOADED_FOLDER)){
   const manga = process.argv[2];
   const mangaFolder = `${DOWNLOADED_FOLDER}/${manga}`;
 
-  if (!fs.existsSync(mangaFolder)){
+  if (!fs.existsSync(mangaFolder)) {
     fs.mkdirSync(mangaFolder);
   }
 
   await page.goto(`https://kissmanga.com/Manga/${manga}`);
-  await page.waitFor('.chapterList');
+  await page.waitFor(".chapterList");
 
   const links = await page.evaluate(() =>
-    Array.from(document.querySelectorAll('.chapterList td > a'), element => element.href)
+    Array.from(
+      document.querySelectorAll(".chapterList td > a"),
+      element => element.href
+    )
   );
 
   const numChapters = links.length;
 
   await asyncForEach(links, async (link, index) => {
     await page.goto(link);
-    await page.waitFor('#divImage');
+    await page.waitFor("#divImage");
     const chapter = numChapters - index; // reverse chronological order
     const chapterFolder = `${mangaFolder}/${chapter}`;
 
-    if (!fs.existsSync(chapterFolder)){
+    if (!fs.existsSync(chapterFolder)) {
       fs.mkdirSync(chapterFolder);
+    } else {
+      // TODO: no good retry mechanism; delete folders and re-run
+      return;
     }
 
-    const images = await page.evaluate(() => Array.from(document.querySelectorAll('#divImage img'), element => element.src));
+    const images = await page.evaluate(() =>
+      Array.from(
+        document.querySelectorAll("#divImage img"),
+        element => element.src
+      )
+    );
 
     await asyncForEach(images, async (src, index) => {
-      const fileFormat = src.match(/(\.[a-zA-Z]*)$/)[0];
-      const viewSource = await page.goto(src);
-      fs.writeFile(`${chapterFolder}/${index}${fileFormat}`, await viewSource.buffer(), (err) => {
-        if (err) {
-          console.error(`error saving image ${index}`, err);
+      try {
+        // if using a proxy, decode image url from proxy
+        if (src.match(/&url=([^&]*)&/)) {
+          src = decodeURIComponent(src.match(/&url=([^&]*)&/)[1]);
         }
-      });
+
+        let fileFormat =
+          (src.match(/(\.[a-zA-Z]*)$/) && src.match(/(\.[a-zA-Z]*)$/)[0]) ||
+          ".jpg";
+
+        const viewSource = await page.goto(src);
+        fs.writeFile(
+          `${chapterFolder}/${index}${fileFormat}`,
+          await viewSource.buffer(),
+          err => {
+            if (err) {
+              console.error(
+                `error saving image ${index} ${src} from chapter ${chapter}`,
+                err
+              );
+            }
+          }
+        );
+      } catch (err) {
+        console.error(
+          `error saving image ${index} ${src} from chapter ${chapter}`,
+          err
+        );
+      }
     });
   });
 
