@@ -34,12 +34,15 @@ if (!fs.existsSync(DOWNLOADED_FOLDER)) {
   );
 
   const numChapters = links.length;
+  const chaptersPadding = numChapters.toString().length;
 
   await asyncForEach(links, async (link, index) => {
     await page.goto(link);
     await page.waitFor("#divImage");
-    const chapter = numChapters - index; // reverse chronological order
-    const chapterFolder = `${mangaFolder}/${chapter}`;
+    const chapter = (numChapters - index)
+      .toString()
+      .padStart(chaptersPadding, "0"); // reverse chronological order
+    const chapterFolder = `${mangaFolder}/${manga}-${chapter}`;
 
     if (!fs.existsSync(chapterFolder)) {
       fs.mkdirSync(chapterFolder);
@@ -54,6 +57,7 @@ if (!fs.existsSync(DOWNLOADED_FOLDER)) {
         element => element.src
       )
     );
+    const imagesPadding = images.length.toString().length;
 
     await asyncForEach(images, async (src, index) => {
       try {
@@ -68,7 +72,9 @@ if (!fs.existsSync(DOWNLOADED_FOLDER)) {
 
         const viewSource = await page.goto(src);
         fs.writeFile(
-          `${chapterFolder}/${index}${fileFormat}`,
+          `${chapterFolder}/${index
+            .toString()
+            .padStart(imagesPadding, "0")}${fileFormat}`,
           await viewSource.buffer(),
           err => {
             if (err) {
