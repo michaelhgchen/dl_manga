@@ -1,98 +1,81 @@
-const fs = require("fs");
+// TODO features
+// - interactive prompt to search through manga
+// - option for naming conventions
+// - option for PDF or EPUB formatting for chapters
+// - better retry mechanisms / de-dupe effort
+
+// const events = require("events");
+const { fork } = require("child_process");
+const os = require("os");
 const puppeteer = require("puppeteer");
 
-const asyncForEach = async (arr, cb) => {
-  for (let i = 0; i < arr.length; ++i) {
-    await cb(arr[i], i);
-  }
-};
+const { createFolderAndCd } = require("./helpers");
 
 const DOWNLOADED_FOLDER = "./downloads";
+const NUM_CORES = os.cpus().length;
 
-if (!fs.existsSync(DOWNLOADED_FOLDER)) {
-  fs.mkdirSync(DOWNLOADED_FOLDER);
-}
-
-(async () => {
+const downloadManga = async manga => {
   const browser = await puppeteer.launch();
   const page = await browser.newPage();
-  const manga = process.argv[2];
-  const mangaFolder = `${DOWNLOADED_FOLDER}/${manga}`;
 
-  if (!fs.existsSync(mangaFolder)) {
-    fs.mkdirSync(mangaFolder);
-  }
+  createFolderAndCd(DOWNLOADED_FOLDER);
+  createFolderAndCd(manga);
 
   await page.goto(`https://kissmanga.com/Manga/${manga}`);
   await page.waitFor(".chapterList");
 
-  const links = await page.evaluate(() =>
+  // grab all chapters
+  const chapterData = await page.evaluate(() =>
     Array.from(
       document.querySelectorAll(".chapterList td > a"),
-      element => element.href
+      ({ href, textContent }) => ({
+        href,
+        text: textContent.trim()
+      })
     )
   );
 
-  const numChapters = links.length;
-  const chaptersPadding = numChapters.toString().length;
+  const totalNumChapters = chapterData.length;
+  const chaptersPadding = totalNumChapters.toString().length;
+  let currentIndex = 0;
+  let numRunningChildren = 0;
 
-  await asyncForEach(links, async (link, index) => {
-    await page.goto(link);
-    await page.waitFor("#divImage");
-    const chapter = (numChapters - index)
-      .toString()
-      .padStart(chaptersPadding, "0"); // reverse chronological order
-    const chapterFolder = `${mangaFolder}/${manga}-${chapter}`;
+  for (let i = 0; i < Math.min(totalNumChapters, NUM_CORES); ++i) {
+    (() => {
+      const childProcess = fork("../../downloadChapter", [], { silent: true }); // silent for stdout
+      numRunningChildren += 1;
 
-    if (!fs.existsSync(chapterFolder)) {
-      fs.mkdirSync(chapterFolder);
-    } else {
-      // TODO: no good retry mechanism; delete folders and re-run
-      return;
-    }
+      const downloadChapter = () => {
+        const index = (currentIndex + 1)
+          .toString()
+          .padStart(chaptersPadding, "0"); // reverse chronological order
 
-    const images = await page.evaluate(() =>
-      Array.from(
-        document.querySelectorAll("#divImage img"),
-        element => element.src
-      )
-    );
-    const imagesPadding = images.length.toString().length;
+        currentIndex += 1;
 
-    await asyncForEach(images, async (src, index) => {
-      try {
-        // if using a proxy, decode image url from proxy
-        if (src.match(/&url=([^&]*)&/)) {
-          src = decodeURIComponent(src.match(/&url=([^&]*)&/)[1]);
-        }
+        childProcess.send({
+          ...chapterData[totalNumChapters - currentIndex],
+          index
+        });
+      };
 
-        let fileFormat =
-          (src.match(/(\.[a-zA-Z]*)$/) && src.match(/(\.[a-zA-Z]*)$/)[0]) ||
-          ".jpg";
+      downloadChapter();
 
-        const viewSource = await page.goto(src);
-        fs.writeFile(
-          `${chapterFolder}/${index
-            .toString()
-            .padStart(imagesPadding, "0")}${fileFormat}`,
-          await viewSource.buffer(),
-          err => {
-            if (err) {
-              console.error(
-                `error saving image ${index} ${src} from chapter ${chapter}`,
-                err
-              );
-            }
+      childProcess.stdout.on('data', data => console.log(data.toString()));
+      childProcess.stderr.on('data', data => console.error(data.toString()));
+
+      childProcess.on("message", () => {
+        if (currentIndex >= totalNumChapters) {
+          childProcess.kill();
+          numRunningChildren -= 1;
+          if (!numRunningChildren) {
+            process.exit();
           }
-        );
-      } catch (err) {
-        console.error(
-          `error saving image ${index} ${src} from chapter ${chapter}`,
-          err
-        );
-      }
-    });
-  });
+        } else {
+          downloadChapter();
+        }
+      });
+    })();
+  }
+};
 
-  await browser.close();
-})();
+downloadManga(process.argv[2]);
